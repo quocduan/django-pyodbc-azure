@@ -1,13 +1,14 @@
 """
 MS SQL Server database backend for Django.
 """
+import datetime
 import os
 import re
 import time
 
 from django.core.exceptions import ImproperlyConfigured
 from django import VERSION
-if VERSION[:3] < (1,10,4) or VERSION[:2] >= (1,11):
+if VERSION[:3] < (1,9,3) or VERSION[:2] >= (1,10):
     raise ImproperlyConfigured("Django %d.%d.%d is not supported." % VERSION[:3])
 
 try:
@@ -40,6 +41,12 @@ from sql_server.pyodbc.schema import DatabaseSchemaEditor
 
 EDITION_AZURE_SQL_DB = 5
 
+ISOLATION_LEVEL_DICT={
+    'READCOMMITTED': 'READ COMMITTED',
+    'READUNCOMMITTED': 'READ UNCOMMITTED',
+    'REPEATABLEREAD': 'REPEATABLE READ',
+    'SERIALIZABLE': 'SERIALIZABLE'
+}
 
 def encode_connection_string(fields):
     """Encode dictionary of keys and values as an ODBC connection String.
@@ -70,7 +77,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     # If a column type is set to None, it won't be included in the output.
     data_types = {
         'AutoField':         'int IDENTITY (1, 1)',
-        'BigAutoField':      'bigint IDENTITY (1, 1)',
         'BigIntegerField':   'bigint',
         'BinaryField':       'varbinary(max)',
         'BooleanField':      'bit',
@@ -125,7 +131,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
     #
     # Note: we use str.format() here for readability as '%' is used as a wildcard for
     # the LIKE operator.
-    pattern_esc = r"REPLACE(REPLACE(REPLACE({}, '\', '[\]'), '%%', '[%%]'), '_', '[_]')"
+    pattern_esc = r"REPLACE(REPLACE(REPLACE({}, '\', '\\'), '%%', '\%%'), '_', '\_')"
     pattern_ops = {
         'contains': "LIKE '%%' + {} + '%%'",
         'icontains': "LIKE '%%' + UPPER({}) + '%%'",
@@ -147,8 +153,6 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         10: 2008,
         11: 2012,
         12: 2014,
-        13: 2016,
-        14: 2017,
     }
 
     # https://azure.microsoft.com/en-us/documentation/articles/sql-database-develop-csharp-retry-windows/
@@ -359,6 +363,15 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         options = settings_dict.get('OPTIONS', {})
         datefirst = options.get('datefirst', 7)
         cursor.execute('SET DATEFORMAT ymd; SET DATEFIRST %s' % datefirst)
+        
+        # duan add custom isolation level
+        isolation_level = options.get('isolation_level', 'READCOMMITTED')
+        if isolation_level in ISOLATION_LEVEL_DICT.keys():
+            isolation_level_str=ISOLATION_LEVEL_DICT[isolation_level]
+        else:
+            isolation_level_str= 'READ COMMITTED'
+        cursor.execute('SET TRANSACTION ISOLATION LEVEL %s' % isolation_level_str)
+        # cursor.execute('SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED')
 
         # http://blogs.msdn.com/b/sqlnativeclient/archive/2008/02/27/microsoft-sql-server-native-client-and-microsoft-sql-server-2008-native-client.aspx
         try:
